@@ -15229,6 +15229,20 @@ scipy_lobpcg  | {:10.2e}  | {:10.2e}  | {:6} | N/A
         with self.assertRaises(RuntimeError):
             torch.trunc(inp)
 
+    # Note: uses deprecated indexing by uint8 to reliably trigger a warning
+    def test_cpp_to_python_warnings(self, device):
+        from inspect import currentframe, getframeinfo
+
+        indices = torch.tensor((0, 1), dtype=torch.uint8)
+        t = torch.tensor((1, 2))
+        with warnings.catch_warnings(record=True) as w:
+            t[indices]
+            frameinfo = getframeinfo(currentframe())
+            self.assertEqual(len(w), 1)
+            warning = w[0]
+            self.assertTrue(re.search(".+internally at.+[cpp|h].+", str(warning.message)) is not None)
+            self.assertEqual(frameinfo.lineno - 1, warning.lineno)
+
 # NOTE [Linspace+Logspace precision override]
 # Our Linspace and logspace torch.half CUDA kernels are not very precise.
 # Since linspace/logspace are deterministic, we can compute an expected
