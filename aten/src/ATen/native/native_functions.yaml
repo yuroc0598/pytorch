@@ -4697,6 +4697,11 @@
 - func: nonzero_numpy(Tensor self) -> Tensor[]
   variants: method, function
 
+- func: debug_index(Tensor self, int dim, Tensor ind, str impl) -> Tensor
+  variants: method, function
+  dispatch:
+    CPU: debug_index
+
 - func: gather.out(Tensor self, int dim, Tensor index, *, bool sparse_grad=False, Tensor(a!) out) -> Tensor(a!)
   dispatch:
     CPU: gather_out_cpu
