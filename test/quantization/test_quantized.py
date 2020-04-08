@@ -271,6 +271,69 @@ class TestQuantizedOps(TestCase):
                          message="Hardsigmoid failed: {} vs. {}".format(qY, qY_hat))
 
 
+    """Tests the correctness of the quantized::qlayer_norm op."""
+    # TODO: improve hypothesis utils and remove these checks
+    @settings(suppress_health_check=(HealthCheck.filter_too_much, HealthCheck.too_slow, HealthCheck.data_too_large))
+    @given(X=hu.tensor(shapes=hu.array_shapes(3, 5, 1, 32),
+                       elements=hu.floats(-1e3, 1e3, allow_nan=False, allow_infinity=False),
+                       qparams=hu.qparams()),
+           Y_scale=st.floats(0.2, 2.6),
+           Y_zero_point=st.integers(0, 5),
+           qengine=st.sampled_from(("qnnpack", "fbgemm")))
+    def test_qlayer_norm(self, X, Y_scale, Y_zero_point, qengine):
+        if qengine not in torch.backends.quantized.supported_engines:
+            return
+
+        with override_quantized_engine(qengine):
+            X, (scale, zero_point, torch_type) = X
+
+            # As the variance of the input array approaches zero, the quantized
+            # calculation gets more accurate compared to floating point
+            # calculation on the dequantized integers, due to loss of precision
+            # from calculating sums and sums of squares in the FP kernel. If needed
+            # in the future, we can change the quantized kernel to calculate sums
+            # using floats, which would be slower but match numerics. Until then,
+            # make assumptions about layer variance and num of unique values
+            nonzero_var_in_each_layer = sum(
+                1 if ((X[i] - X[i].min()) / (X[i].max() - X[i].min() + 1e-5)).std() > 1e-2 else 0
+                for i in range(X.shape[0])
+            ) == X.shape[0]
+            assume(nonzero_var_in_each_layer)
+            enough_unique_vals_in_each_layer = sum(
+                1 if (
+                    X[i].size < 5 or
+                    float(np.unique(X[i]).shape[0]) / X[i].size > 0.01) else 0
+                for i in range(X.shape[0])
+            ) == X.shape[0]
+            assume(enough_unique_vals_in_each_layer)
+
+            X = torch.from_numpy(X)
+            qX = torch.quantize_per_tensor(X, scale=scale,
+                                           zero_point=zero_point,
+                                           dtype=torch_type)
+            dqX = qX.dequantize()
+
+            # Initialize the weights non-randomly for reproducibility, to avoid
+            # flaky tests
+            weight = torch.ones(*qX.size()[1:], dtype=torch.float) * 0.5
+            bias = torch.ones(*qX.size()[1:], dtype=torch.float) * 1
+            epsilon = 1e-5
+
+            qY = torch.ops.quantized.layer_norm(
+                qX, qX.size()[1:], weight=weight, bias=bias, eps=epsilon,
+                output_scale=Y_scale, output_zero_point=Y_zero_point)
+
+            Y_hat = F.layer_norm(
+                dqX, dqX.size()[1:], weight=weight, bias=bias, eps=epsilon)
+            qY_hat = torch.quantize_per_tensor(
+                Y_hat, scale=Y_scale, zero_point=Y_zero_point, dtype=torch_type)
+
+            self.assertEqual(
+                qY,
+                qY_hat,
+                message="LayerNorm failed:\n {} input vs\n {} actual vs \n{} expected".format(X, qY, qY_hat))
+
+
     """Tests the correctness of the quantized::qnnpack_tanh op."""
     @given(X=hu.tensor(shapes=hu.array_shapes(1, 5, 1, 5),
                        qparams=hu.qparams()))
